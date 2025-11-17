@@ -141,17 +141,24 @@ with DAG(
                 FROM @s3_traffic_stage/{{ ti.xcom_pull(task_ids="upload_csv_to_s3", key="s3_key") }}
             )
             FILE_FORMAT=(TYPE=CSV SKIP_HEADER=1 FIELD_OPTIONALLY_ENCLOSED_BY='"');
+            
+            -- 기존 테이블 데이터를 임시 테이블에 복사
+            INSERT INTO traffic_event_temp_jiyeon
+            SELECT * FROM traffic_event_jiyeon;
+            
+            -- 기존 데이터 삭제
+            DELETE FROM traffic_event_jiyeon;
         
             -- 중복 제거하여 최종 테이블에 삽입
             INSERT INTO traffic_event_jiyeon (
                 type, eventType, eventDetailType, startDate, coordX, coordY,
                 linkId, roadName, roadNo, roadDrcType, lanesBlockType,
-                lanesBlocked, message, endDate
+                lanesBlocked, message, endDate, createdAt
             )
             SELECT 
                 type, eventType, eventDetailType, startDate, coordX, coordY,
                 linkId, roadName, roadNo, roadDrcType, lanesBlockType,
-                lanesBlocked, message, endDate
+                lanesBlocked, message, endDate, createdAt
             FROM (
                 SELECT *,
                        ROW_NUMBER() OVER (
@@ -159,13 +166,8 @@ with DAG(
                            ORDER BY createdAt DESC
                        ) AS rn
                 FROM traffic_event_temp_jiyeon
-            ) WHERE rn = 1
-            AND NOT EXISTS (
-                SELECT 1 FROM traffic_event_jiyeon t
-                WHERE t.startDate = startDate 
-                  AND t.coordX = coordX
-                  AND t.coordY = coordY
-            );
+            ) 
+            WHERE rn = 1;
             
             -- 임시 테이블 삭제
             DROP TABLE IF EXISTS traffic_event_temp_jiyeon;
