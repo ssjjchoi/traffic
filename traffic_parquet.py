@@ -14,7 +14,7 @@ from airflow.providers.snowflake.operators.snowflake import SnowflakeOperator
 DAG: traffic_pipeline
 
 Purpose:
-- Real-time traffic data collection
+- Real-time traffic event data collection
 - End-to-end pipeline: S3 → Snowflake → dbt → Superset
 - Deliver analytics-ready datasets with automated data quality checks
 
@@ -35,7 +35,7 @@ def fetch_and_process(**context):
     url = f"https://openapi.its.go.kr:9443/eventInfo?apiKey={api_key}&type=all&eventType=all&getType=json"
 
     res = requests.get(url)
-    res.raise_for_status()  # 상태 코드 간결 체크
+    res.raise_for_status()
 
     events = res.json().get("body", {}).get("items", [])
     if not events:
@@ -43,40 +43,58 @@ def fetch_and_process(**context):
 
     df = pd.DataFrame(events)
     df = df.astype(str)
+
     ingestion_date = datetime.now().strftime("%Y-%m-%d")
-    
-    # 원본 CSV 저장 (Airflow 서버 or 컨테이너 내 원본 보존)
-    csv_file_path = f"/tmp/events_{ingestion_date}.csv"
-    df.to_csv(csv_file_path, index=False)
-    
-    # Parquet 변환 저장
-    parquet_file_path = f"/tmp/events_{ingestion_date}.parquet"
-    df.to_parquet(parquet_file_path, index=False)
-    #df.to_parquet(parquet_file_path, index=False, engine="pyarrow")
-    # XCom에 Parquet 경로만 전달
+    folder_path = f"/tmp/events_{ingestion_date}/"
+    os.makedirs(folder_path, exist_ok=True)
+
+    # 원본 CSV 저장
+    csv_file_path_original = os.path.join(folder_path, "event_info_original.csv")
+    df.to_csv(csv_file_path_original, index=False)
+
+    # 유니크 ID 생성 + 중복 제거
+    df['unique_id'] = df['startDate'] + "_" + df['linkId']
+    df_dedup = df.drop_duplicates(subset='unique_id')
+
+    # 중복 제거 후 Parquet 저장
+    parquet_file_path = os.path.join(folder_path, "event_info_dedup.parquet")
+    df_dedup.to_parquet(parquet_file_path, index=False)
+
+    # XCom에 Parquet 경로 전달 (S3 업로드용)
     context["ti"].xcom_push(key="file_path", value=parquet_file_path)
 
 
-
 def upload_to_s3_partitioned(**context):
+    s3 = S3Hook("aws_default")
+    
     file_path = context["ti"].xcom_pull(key="file_path")
-    print(f"[DEBUG] Uploading file: {file_path}, exists: {os.path.exists(file_path)}")
-    if not file_path or not os.path.exists(file_path):
-        raise FileNotFoundError(f"{file_path}가 존재하지 않음")
+    # print(f"[DEBUG] Uploading file: {file_path}, exists: {os.path.exists(file_path)}")
+    folder_path = os.path.dirname(file_path)
+    csv_file_path = os.path.join(folder_path, "event_info_original.csv")
 
-    s3_key = f"rawdata/traffic_event/ingestion_date={context['ds']}/event_info.parquet"
-    S3Hook("aws_default").load_file(
+    for f in [file_path, csv_file_path]:
+        if not os.path.exists(f):
+            raise FileNotFoundError(f"{f}가 존재하지 않음")
+
+    s3.load_file(
         filename=file_path,
-        key=s3_key,
+        key=f"rawdata/soojin/ingestion_date={context['ds']}/event_info_dedup.parquet",
         bucket_name="traffic-s3-team4",
-        replace=True  # overwrite
+        replace=True
     )
 
+    s3.load_file(
+        filename=csv_file_path,
+        key=f"rawdata/soojin/ingestion_date={context['ds']}/event_info_original.csv",
+        bucket_name="traffic-s3-team4",
+        replace=True
+    )
 
+    
 with DAG(
     dag_id="traffic_pipeline_s3_snowflake_folder_partitioning_parquet",
     start_date=datetime(2025, 1, 1),
-    schedule="@hourly",
+    schedule="0 */3 * * *",
     catchup=False,
     doc_md="""
     ## 교통 이벤트 파이프라인 DAG
@@ -103,7 +121,7 @@ with DAG(
     task_id="create_snowflake_table",
     snowflake_conn_id="sf_conn",
     sql="""
-        CREATE TABLE IF NOT EXISTS TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_FOLDER_PARTITIONING_PARQUET_SOOJIN (
+        CREATE TABLE IF NOT EXISTS TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_SOOJIN (
             type VARCHAR,                -- 고속도로, 일반도로 등
             eventType VARCHAR,           -- 공사, 기타돌발 등
             eventDetailType VARCHAR,     -- 작업, 고장, 이벤트/홍보 등
@@ -128,8 +146,11 @@ with DAG(
     task_id="copy_into_snowflake",
     snowflake_conn_id="sf_conn",
     sql="""
-        COPY INTO TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_FOLDER_PARTITIONING_PARQUET_SOOJIN
-        FROM 's3://traffic-s3-team4/rawdata/traffic_event/ingestion_date={{ ds }}/'
+        CREATE TEMPORARY TABLE TRAFFIC_EVENT_TMP LIKE TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_SOOJIN;
+
+        -- COPY INTO TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_SOOJIN
+        COPY INTO TRAFFIC_EVENT_TMP
+        FROM 's3://traffic-s3-team4/rawdata/soojin/ingestion_date={{ ds }}/'
         CREDENTIALS=(
             AWS_KEY_ID='{{ conn.aws_default.login }}'
             AWS_SECRET_KEY='{{ conn.aws_default.password }}'
@@ -138,6 +159,35 @@ with DAG(
         MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE
         -- ON_ERROR='ABORT_STATEMENT';
         ON_ERROR='CONTINUE';
+
+        CREATE TEMPORARY TABLE TRAFFIC_EVENT_TMP_DISTINCT AS
+        SELECT DISTINCT * FROM TRAFFIC_EVENT_TMP;
+
+        MERGE INTO TRAFFIC_DB.RAW_DATA.TRAFFIC_EVENT_SOOJIN AS target
+        USING TRAFFIC_EVENT_TMP AS src
+        ON target.startDate = src.startDate AND target.linkId = src.linkId
+        WHEN MATCHED THEN UPDATE SET
+            type = src.type,
+            eventType = src.eventType,
+            eventDetailType = src.eventDetailType,
+            coordX = src.coordX,
+            coordY = src.coordY,
+            roadName = src.roadName,
+            roadNo = src.roadNo,
+            roadDrcType = src.roadDrcType,
+            lanesBlockType = src.lanesBlockType,
+            lanesBlocked = src.lanesBlocked,
+            message = src.message,
+            endDate = src.endDate,
+            ingestion_timestamp = CURRENT_TIMESTAMP()
+        WHEN NOT MATCHED THEN
+            INSERT (type, eventType, eventDetailType, startDate, coordX, coordY, linkId,
+                    roadName, roadNo, roadDrcType, lanesBlockType, lanesBlocked, message,
+                    endDate, ingestion_timestamp)
+            VALUES (src.type, src.eventType, src.eventDetailType, src.startDate, src.coordX,
+                    src.coordY, src.linkId, src.roadName, src.roadNo, src.roadDrcType,
+                    src.lanesBlockType, src.lanesBlocked, src.message, src.endDate,
+                    CURRENT_TIMESTAMP());
         """,
     doc_md="**S3 Parquet → Snowflake COPY, 원본 보존**",
     )
