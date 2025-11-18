@@ -78,7 +78,7 @@ def upload_csv_to_s3(**context) -> str:
 
 
 with DAG(
-    dag_id="upload_api_to_local_and_s3",
+    dag_id="upload_api_to_snowflake",
     start_date=datetime(2022, 5, 5),
     catchup=False,
     tags=["data_pipeline"],

@@ -19,7 +19,7 @@ with DAG(
     start_date=datetime(2025, 11, 17),
     catchup=False,
     tags=["data_pipeline"],
-    schedule="0 0 * * *",
+    schedule="5 12 * * *",
 ) as dag:
 
     delete_local_data = PythonOperator(
