@@ -1,0 +1,13 @@
+-- 시간대별(시 단위) 지속시간 평균 분석`
+
+SELECT
+DATE_TRUNC('hour', STARTDATE) AS hour_block,
+AVG(
+CASE
+WHEN ENDDATE IS NULL THEN DATEDIFF('minute', STARTDATE, CURRENT_TIMESTAMP)
+ELSE DATEDIFF('minute', STARTDATE, ENDDATE)
+END
+) AS avg_duration_min
+FROM TRAFFIC_EVENT_JIYEON
+GROUP BY hour_block
+ORDER BY hour_block;
