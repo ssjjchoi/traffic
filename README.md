@@ -83,7 +83,7 @@ traffic-404/
 │       │       └── stg_event_info.sql
 │       │
 │       ├── models-soojin/                    # 수진님 dbt 모델 집합
-│       │   ├── marts/
+│       │   └── marts/
 │       │       ├── daily_event_count.sql
 │       │       ├── daily_event_count.yml
 │       │       ├── hourly_event_heatmap.sql
