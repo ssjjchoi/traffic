@@ -43,7 +43,9 @@
         ↓
 [Superset Dashboard]
 ```
-<img width="1258" height="397" alt="프로젝트 아키텍처" src="https://github.com/user-attachments/assets/b71d631a-9ad2-4309-9c64-c6daa3747e75" />
+<!-- <img width="1258" height="397" alt="프로젝트 아키텍처" src="https://github.com/user-attachments/assets/b71d631a-9ad2-4309-9c64-c6daa3747e75" /> -->
+
+![프로젝트 아키텍처](./assets/img1.png)
 
 ## 디렉토리 구조
 ```
@@ -103,5 +105,7 @@ traffic-404/
 ```
 
 ## 시각화 화면
-![project-3-team-4_superset_dashboard](https://github.com/user-attachments/assets/3ce1dfe2-0040-4812-8418-d260c4441f78)
+<!-- ![project-3-team-4_superset_dashboard](https://github.com/user-attachments/assets/3ce1dfe2-0040-4812-8418-d260c4441f78) -->
+
+![시각화 화면](./assets/img2.jpg)
 
